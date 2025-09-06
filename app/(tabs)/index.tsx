@@ -1,7 +1,7 @@
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
 import * as Location from 'expo-location';
-import * as Crypto from 'expo-crypto';
+import { getOrCreateDeviceId } from '../../utils/deviceId';
 import { sendLocationToSupabase, LocationData, upsertDevice } from '@/lib/supabase';
 
 export default function TransmitterScreen() {
@@ -23,25 +23,6 @@ export default function TransmitterScreen() {
       }
     };
   }, []);
-
-  // Get device identifier
-  const getDeviceId = async () => {
-    try {
-      const newUuid = Crypto.randomUUID();
-      console.log('Generated new device ID:', newUuid);
-      if (mounted.current) {
-        setDeviceId(newUuid);
-      }
-      return newUuid;
-    } catch (error) {
-      console.error('Error with device ID:', error);
-      const randomId = 'device_' + Math.random().toString(36).substr(2, 9);
-      if (mounted.current) {
-        setDeviceId(randomId);
-      }
-      return randomId;
-    }
-  };
 
   const requestPermissionsAndGetLocation = async () => {
     if (!mounted.current) return;
@@ -76,7 +57,12 @@ export default function TransmitterScreen() {
       // Send to Supabase
       setTransmissionStatus('sending');
       
-      const currentDeviceId = deviceId || await getDeviceId();
+      const currentDeviceId = deviceId || await getOrCreateDeviceId();
+      
+      // Update state if we just got the device ID
+      if (!deviceId && mounted.current) {
+        setDeviceId(currentDeviceId);
+      }
       
       // First, register the device
       console.log('📱 Registering device:', currentDeviceId);
@@ -139,7 +125,11 @@ export default function TransmitterScreen() {
       if (!mounted.current) return;
       
       console.log('🚀 Initializing app...');
-      const id = await getDeviceId();
+      const id = await getOrCreateDeviceId();
+      
+      if (mounted.current) {
+        setDeviceId(id);
+      }
       
       if (!mounted.current) return;
       
