@@ -11,7 +11,6 @@ if (!supabaseUrl || !supabaseAnonKey) {
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export interface LocationData {
-  device_id: string; // This will be the UUID from the 'devices' table
   latitude: number;
   longitude: number;
   accuracy?: number; // Optional, matches schema

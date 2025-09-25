@@ -12,6 +12,7 @@ export default function TransmitterScreen() {
   const [updateCount, setUpdateCount] = useState(0);
   const [transmissionStatus, setTransmissionStatus] = useState('idle');
   const [deviceId, setDeviceId] = useState('');
+  const [supabaseDeviceId, setSupabaseDeviceId] = useState<string | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Cleanup on unmount
@@ -64,27 +65,36 @@ export default function TransmitterScreen() {
         setDeviceId(currentDeviceId);
       }
       
-      // First, register the device
-      console.log('📱 Registering device:', currentDeviceId);
-      const deviceResult = await upsertDevice(currentDeviceId, 'generated_uuid');
-      
-      if (!deviceResult.success) {
-        if (mounted.current) {
-          setTransmissionStatus('error');
+      // Register device if we don't have a Supabase device ID yet
+      let currentSupabaseDeviceId = supabaseDeviceId;
+      if (!currentSupabaseDeviceId) {
+        console.log('📱 Registering device with IMEI:', currentDeviceId);
+        const deviceName = `Transmitter-${currentDeviceId.substring(0, 8)}`;
+        const deviceResult = await upsertDevice(currentDeviceId, deviceName);
+        
+        if (!deviceResult.success || !deviceResult.data?.id) {
+          if (mounted.current) {
+            setTransmissionStatus('error');
+          }
+          console.error('❌ Failed to register device:', deviceResult.error);
+          Alert.alert('Device Registration Error', `Failed to register device: ${deviceResult.error}`);
+          return;
         }
-        console.error('❌ Failed to register device:', deviceResult.error);
-        Alert.alert('Device Registration Error', `Failed to register device: ${deviceResult.error}`);
-        return;
+        
+        console.log('✅ Device registered successfully. Supabase ID:', deviceResult.data.id);
+        currentSupabaseDeviceId = deviceResult.data.id;
+        
+        if (mounted.current) {
+          setSupabaseDeviceId(currentSupabaseDeviceId);
+        }
       }
       
-      console.log('✅ Device registered successfully');
-      
       const locationData: LocationData = {
-        device_id: currentDeviceId,
-        device_type: 'generated_uuid',
+        device_id: currentSupabaseDeviceId,
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
-        accuracy: loc.coords.accuracy || 0,
+        accuracy: loc.coords.accuracy || undefined,
+        speed: loc.coords.speed || undefined,
         timestamp: new Date().toISOString(),
       };
 
@@ -185,6 +195,10 @@ export default function TransmitterScreen() {
 
       {deviceId ? (
         <Text style={styles.deviceId}>Device ID: {deviceId}</Text>
+      ) : null}
+      
+      {supabaseDeviceId ? (
+        <Text style={styles.deviceId}>Supabase ID: {supabaseDeviceId}</Text>
       ) : null}
 
       {updateCount > 0 ? (
