@@ -6,13 +6,14 @@ import { sendLocationToSupabase, LocationData, upsertDevice } from '../lib/supab
 
 export default function HomeScreen() {
   const mounted = useRef(true);
-  const [location, setLocation] = useState(null);
-  const [permissionStatus, setPermissionStatus] = useState('checking');
-  const [lastUpdate, setLastUpdate] = useState(null);
+  const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [permissionStatus, setPermissionStatus] = useState<'checking' | 'denied' | 'granted'>('checking');
+  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [updateCount, setUpdateCount] = useState(0);
-  const [transmissionStatus, setTransmissionStatus] = useState('idle');
-  const [deviceId, setDeviceId] = useState('');
-  const intervalRef = useRef(null);
+  const [transmissionStatus, setTransmissionStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
+  const [deviceIMEI, setDeviceIMEI] = useState(''); // This will store the generated IMEI
+  const [deviceSupabaseId, setDeviceSupabaseId] = useState<string | null>(null); // This will store the UUID from Supabase's 'devices.id'
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -24,20 +25,20 @@ export default function HomeScreen() {
     };
   }, []);
 
-  // Get device identifier
-  const getDeviceId = async () => {
+  // Get device identifier (IMEI-like)
+  const generateDeviceIMEI = async () => {
     try {
       const newUuid = Crypto.randomUUID();
-      console.log('Generated new device ID:', newUuid);
+      console.log('Generated new device IMEI:', newUuid);
       if (mounted.current) {
-        setDeviceId(newUuid);
+        setDeviceIMEI(newUuid);
       }
       return newUuid;
     } catch (error) {
-      console.error('Error with device ID:', error);
-      const randomId = 'device_' + Math.random().toString(36).substr(2, 9);
+      console.error('Error generating device IMEI:', error);
+      const randomId = 'imei_' + Math.random().toString(36).substr(2, 9);
       if (mounted.current) {
-        setDeviceId(randomId);
+        setDeviceIMEI(randomId);
       }
       return randomId;
     }
@@ -73,32 +74,52 @@ export default function HomeScreen() {
       setLastUpdate(new Date().toLocaleTimeString());
       setUpdateCount(prev => prev + 1);
       
-      // Send to Supabase
       setTransmissionStatus('sending');
       
-      const currentDeviceId = deviceId || await getDeviceId();
+      // Ensure we have an IMEI and the Supabase device ID
+      let currentIMEI = deviceIMEI;
+      if (!currentIMEI) {
+        currentIMEI = await generateDeviceIMEI();
+      }
+
+      let currentDeviceSupabaseId = deviceSupabaseId;
+      if (!currentDeviceSupabaseId) {
+        // First, upsert the device to get its Supabase 'id'
+        console.log('📱 Upserting device with IMEI:', currentIMEI);
+        const deviceName = `Transmitter-${currentIMEI.substring(0, 8)}`; // Generate a name
+        const deviceResult = await upsertDevice(currentIMEI, deviceName);
+        
+        if (!deviceResult.success || !deviceResult.data?.id) {
+          if (mounted.current) {
+            setTransmissionStatus('error');
+          }
+          console.error('❌ Failed to upsert device:', deviceResult.error);
+          Alert.alert('Device Registration Error', `Failed to register device: ${deviceResult.error}`);
+          return;
+        }
+        
+        console.log('✅ Device upserted successfully. Supabase ID:', deviceResult.data.id);
+        if (mounted.current) {
+          setDeviceSupabaseId(deviceResult.data.id);
+          currentDeviceSupabaseId = deviceResult.data.id;
+        }
+      }
       
-      // First, register the device
-      console.log('📱 Registering device:', currentDeviceId);
-      const deviceResult = await upsertDevice(currentDeviceId, 'generated_uuid');
-      
-      if (!deviceResult.success) {
+      if (!currentDeviceSupabaseId) {
+        console.error('❌ Supabase device ID is missing after upsert.');
         if (mounted.current) {
           setTransmissionStatus('error');
         }
-        console.error('❌ Failed to register device:', deviceResult.error);
-        Alert.alert('Device Registration Error', `Failed to register device: ${deviceResult.error}`);
+        Alert.alert('Error', 'Could not obtain Supabase device ID.');
         return;
       }
-      
-      console.log('✅ Device registered successfully');
-      
+
       const locationData: LocationData = {
-        device_id: currentDeviceId,
-        device_type: 'generated_uuid',
+        device_id: currentDeviceSupabaseId, // Use the Supabase-generated device ID
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
-        accuracy: loc.coords.accuracy || 0,
+        accuracy: loc.coords.accuracy || undefined, // Use undefined for optional fields if 0 is not desired
+        speed: loc.coords.speed || undefined,       // Use undefined for optional fields if 0 is not desired
         timestamp: new Date().toISOString(),
       };
 
@@ -124,7 +145,7 @@ export default function HomeScreen() {
         }
       }, 3000);
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Location error:', error);
       if (mounted.current) {
         setTransmissionStatus('error');
@@ -133,17 +154,17 @@ export default function HomeScreen() {
     }
   };
 
-  // Initialize device ID and start location tracking
+  // Initialize device IMEI and start location tracking
   useEffect(() => {
     const initialize = async () => {
       if (!mounted.current) return;
       
       console.log('Initializing app...');
-      const id = await getDeviceId();
+      const imei = await generateDeviceIMEI(); // Generate IMEI on startup
       
       if (!mounted.current) return;
       
-      // Get initial location
+      // Get initial location and start updates
       await requestPermissionsAndGetLocation();
       
       if (!mounted.current) return;
@@ -193,8 +214,11 @@ export default function HomeScreen() {
         </Text>
       </View>
 
-      {deviceId ? (
-        <Text style={styles.deviceId}>Device ID: {deviceId}</Text>
+      {deviceIMEI ? (
+        <Text style={styles.deviceId}>Device IMEI: {deviceIMEI}</Text>
+      ) : null}
+      {deviceSupabaseId ? (
+        <Text style={styles.deviceId}>Supabase ID: {deviceSupabaseId}</Text>
       ) : null}
 
       {updateCount > 0 ? (
@@ -217,6 +241,9 @@ export default function HomeScreen() {
           </Text>
           <Text style={styles.locationText}>
             Accuracy: {location.coords.accuracy?.toFixed(1)}m
+          </Text>
+          <Text style={styles.locationText}>
+            Speed: {location.coords.speed?.toFixed(1) || 'N/A'} km/h
           </Text>
           <Text style={styles.locationText}>
             Time: {new Date(location.timestamp).toLocaleString()}
@@ -255,7 +282,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
   },
-  deviceId: {
+  deviceId: { // Renamed from deviceId to be more generic for both IMEI and Supabase ID
     color: '#888',
     fontSize: 12,
     marginBottom: 15,
