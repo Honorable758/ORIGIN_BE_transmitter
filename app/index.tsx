@@ -2,6 +2,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
 import * as Location from 'expo-location';
 import * as Crypto from 'expo-crypto';
+import AsyncStorage from '@react-native-async-storage/async-storage'; // Make sure to install this package
 import { sendLocationToSupabase, LocationData, upsertDevice } from '../lib/supabase';
 
 export default function HomeScreen() {
@@ -25,17 +26,24 @@ export default function HomeScreen() {
     };
   }, []);
 
-  // Get device identifier (IMEI-like)
-  const generateDeviceIMEI = async () => {
+  // Get device identifier (IMEI-like) - persistent across app restarts
+  const generateAndStoreDeviceIMEI = async () => {
     try {
-      const newUuid = Crypto.randomUUID();
-      console.log('Generated new device IMEI:', newUuid);
-      if (mounted.current) {
-        setDeviceIMEI(newUuid);
+      let storedIMEI = await AsyncStorage.getItem('deviceIMEI');
+      if (!storedIMEI) {
+        storedIMEI = Crypto.randomUUID();
+        await AsyncStorage.setItem('deviceIMEI', storedIMEI);
+        console.log('Generated new device IMEI:', storedIMEI);
+      } else {
+        console.log('Retrieved stored device IMEI:', storedIMEI);
       }
-      return newUuid;
+      
+      if (mounted.current) {
+        setDeviceIMEI(storedIMEI);
+      }
+      return storedIMEI;
     } catch (error) {
-      console.error('Error generating device IMEI:', error);
+      console.error('Error generating/retrieving device IMEI:', error);
       const randomId = 'imei_' + Math.random().toString(36).substr(2, 9);
       if (mounted.current) {
         setDeviceIMEI(randomId);
@@ -76,17 +84,17 @@ export default function HomeScreen() {
       
       setTransmissionStatus('sending');
       
-      // Ensure we have an IMEI and the Supabase device ID
+      // Ensure we have an IMEI
       let currentIMEI = deviceIMEI;
       if (!currentIMEI) {
-        currentIMEI = await generateDeviceIMEI();
+        currentIMEI = await generateAndStoreDeviceIMEI();
       }
 
+      // Attempt to upsert the device and get its Supabase ID
       let currentDeviceSupabaseId = deviceSupabaseId;
       if (!currentDeviceSupabaseId) {
-        // First, upsert the device to get its Supabase 'id'
         console.log('📱 Upserting device with IMEI:', currentIMEI);
-        const deviceName = `Transmitter-${currentIMEI.substring(0, 8)}`; // Generate a name
+        const deviceName = `Transmitter-${currentIMEI.substring(0, 8)}`; // Generate a default name
         const deviceResult = await upsertDevice(currentIMEI, deviceName);
         
         if (!deviceResult.success || !deviceResult.data?.id) {
@@ -118,8 +126,8 @@ export default function HomeScreen() {
         device_id: currentDeviceSupabaseId, // Use the Supabase-generated device ID
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
-        accuracy: loc.coords.accuracy || undefined, // Use undefined for optional fields if 0 is not desired
-        speed: loc.coords.speed || undefined,       // Use undefined for optional fields if 0 is not desired
+        accuracy: loc.coords.accuracy || undefined,
+        speed: loc.coords.speed || undefined,
         timestamp: new Date().toISOString(),
       };
 
@@ -160,7 +168,7 @@ export default function HomeScreen() {
       if (!mounted.current) return;
       
       console.log('Initializing app...');
-      const imei = await generateDeviceIMEI(); // Generate IMEI on startup
+      const imei = await generateAndStoreDeviceIMEI(); // Generate/retrieve IMEI on startup
       
       if (!mounted.current) return;
       
@@ -282,7 +290,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
   },
-  deviceId: { // Renamed from deviceId to be more generic for both IMEI and Supabase ID
+  deviceId: {
     color: '#888',
     fontSize: 12,
     marginBottom: 15,
